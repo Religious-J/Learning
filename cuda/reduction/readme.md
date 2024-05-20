@@ -249,3 +249,159 @@ __global__ void reduce0(int *g_idata, int *g_odata) {
 
 在不展开的情况下，所有 warp 都会执行 for 循环和 if 状态的每次迭代
 
+
+## Reduction6 Completely Unrolled
+
+在 G80 GPU 中， block 的大小被限制到 512 threads， 一般都是采用 2 的幂次方的 size
+
+所以可以轻松地展开固定块的大小
+
+利用模板 Templates
+
+将块的大小指定为函数的模板参数
+
+```cpp
+
+__device__ void warpReduce(volatile int *sdata, int tid) {
+  if (blockSize >= 64)
+    sdata[tid] += sdata[tid + 32];
+  if (blockSize >= 32)
+    sdata[tid] += sdata[tid + 16];
+  if (blockSize >= 16)
+    sdata[tid] += sdata[tid + 8];
+  if (blockSize >= 8)
+    sdata[tid] += sdata[tid + 4];
+  if (blockSize >= 4)
+    sdata[tid] += sdata[tid + 2];
+  if (blockSize >= 2)
+    sdata[tid] += sdata[tid + 1];
+}
+
+template<unsigned int blockSize>
+__global__ void reduce(int *g_idata, int *g_odata) {
+  extern __shared__ int sdata[];
+
+  unsigned int tid = threadIdx.x;
+  unsigned int i = blockIdx.x * blockDim.x * 2 + threadIdx.x;
+  sdata[tid] = g_idata[i] + g_idata[i + blockDim.x];
+
+  __syncthreads();
+
+  if(blockSize >= 512){
+    if(tid < 256){
+      sdata[tid] += sdata[tid+256];
+      __syncthreads();
+    }
+  }
+
+  if(blockSize >= 256){
+    if(tid < 128){
+      sdata[tid] += sdata[tid+128];
+      __syncthreads();
+    }
+  }
+
+  if(blockSize >= 128){
+    if(tid < 64){
+      sdata[tid] += sdata[tid+64];
+      __syncthreads();
+    }
+  }
+
+  if (tid < 32)
+    warpReduce(sdata, tid);
+
+  if (tid == 0)
+    g_odata[blockIdx.x] = sdata[0];
+}
+
+```
+
+## Parallel Reduction Complexity
+
+布伦特定理 Brent's theorem 建议 O(N/log N) 个 threads
+
+每个线程执行 O(log N) 顺序工作
+
+然后所有 O(N/log N) 线程协作执行 O(log N) 步骤
+
+成本 = O((N/log N) * log N) = O(N)  成本效率高
+
+有时称为算法级联 algorithm cascading，可以在实践中带来显着的加速
+
+结合顺序和并行 reduction
+
+每个线程将多个元素加载并求和到共享内存
+
+布伦特定理 - 每个线程应该对 O(log n) 个元素求和
+
+i.e. 1024 or 2048 elements per block vs. 256
+
+每个线程可以完成更多工作，从而可能更好地隐藏延迟
+
+每个块更多的线程减少了递归树中的级别内核调用
+
+当只有少量块时，在最后几个级别上存在较高的内核启动开销。
+
+```cpp
+
+__device__ void warpReduce(volatile int *sdata, int tid) {
+  if (blockSize >= 64)
+    sdata[tid] += sdata[tid + 32];
+  if (blockSize >= 32)
+    sdata[tid] += sdata[tid + 16];
+  if (blockSize >= 16)
+    sdata[tid] += sdata[tid + 8];
+  if (blockSize >= 8)
+    sdata[tid] += sdata[tid + 4];
+  if (blockSize >= 4)
+    sdata[tid] += sdata[tid + 2];
+  if (blockSize >= 2)
+    sdata[tid] += sdata[tid + 1];
+}
+
+template<unsigned int blockSize>
+__global__ void reduce(int *g_idata, int *g_odata) {
+  extern __shared__ int sdata[];
+  unsigned int tid = threadIdx.x;
+  unsigned int i = blockIdx.x * blockSize * 2 + threadIdx.x;
+  unsigned int gridSize = blockSize * 2 * gridDim.x;
+  // 注意：gridSize循环步幅以保持合并！
+
+  sdata[tid] = 0;
+
+  while(i < n){
+    sdata[tid] += g_idata[i] + g_idata[i+blockSize];
+    i += gridSize;
+  }
+  __syncthreads();
+
+  if(blockSize >= 512){
+    if(tid < 256){
+      sdata[tid] += sdata[tid+256];
+      __syncthreads();
+    }
+  }
+
+  if(blockSize >= 256){
+    if(tid < 128){
+      sdata[tid] += sdata[tid+128];
+      __syncthreads();
+    }
+  }
+
+  if(blockSize >= 128){
+    if(tid < 64){
+      sdata[tid] += sdata[tid+64];
+      __syncthreads();
+    }
+  }
+
+  if (tid < 32)
+    warpReduce(sdata, tid);
+
+  if (tid == 0)
+    g_odata[blockIdx.x] = sdata[0];
+}
+```
+
