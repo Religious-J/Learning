@@ -1,3 +1,5 @@
+# CUDA 并行归约
+
 ```cpp
 #include <stdio.h>
 #include <cuda_runtime.h>
@@ -263,7 +265,108 @@ void reduction1t(int *answer, int *partial, const int *in, const size_t N, const
 
 ```
 
+# CUDA矩阵乘法
 
+```c++
+#include <iostream>
+#include <cuda_runtime.h>
+
+// CUDA kernel function for matrix multiplication
+__global__ void matrixMul(float* A, float* B, float* C, int width) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < width && col < width) {
+        float sum = 0.0f;
+        for (int i = 0; i < width; i++) {
+            sum += A[row * width + i] * B[i * width + col];
+        }
+        C[row * width + col] = sum;
+    }
+}
+
+int main() {
+    const int width = 1024;
+    size_t size = width * width * sizeof(float);
+
+    // Allocate memory on the host
+    float* h_A = new float[width * width];
+    float* h_B = new float[width * width];
+    float* h_C = new float[width * width];
+
+    // Initialize matrix A and B
+    // ... (Omitted for brevity)
+
+    // Allocate memory on the device
+    float* d_A, * d_B, * d_C;
+    cudaMalloc(&d_A, size);
+    cudaMalloc(&d_B, size);
+    cudaMalloc(&d_C, size);
+
+    // Copy data from host to device
+    cudaMemcpy(d_A, h_A, size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, h_B, size, cudaMemcpyHostToDevice);
+
+    // Launch the CUDA kernel
+    dim3 block(16, 16);
+    dim3 grid((width + block.x - 1) / block.x, (width + block.y - 1) / block.y);
+    matrixMul<<<grid, block>>>(d_A, d_B, d_C, width);
+
+    // Copy the result from device to host
+    cudaMemcpy(h_C, d_C, size, cudaMemcpyDeviceToHost);
+
+    // Free memory
+    delete[] h_A;
+    delete[] h_B;
+    delete[] h_C;
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+
+    return 0;
+}
+
+```
+
+```c++
+// 加上了共享内存的方式
+// CUDA kernel function for matrix multiplication
+__global__ void matrixMulKernel(float* A, float* B, float* C, int width) {
+    // Allocate shared memory for matrix tiles
+    __shared__ float Asub[16][16];
+    __shared__ float Bsub[16][16];
+
+    // Calculate the row and column index of the element
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Initialize the accumulator
+    float sum = 0.0f;
+
+    // Loop over the tiles
+    for (int t = 0; t < (width + 15) / 16; ++t) {
+        // Load the matrices from global memory to shared memory
+        Asub[threadIdx.y][threadIdx.x] = A[row * width + (t * 16 + threadIdx.x)];
+        Bsub[threadIdx.y][threadIdx.x] = B[(t * 16 + threadIdx.y) * width + col];
+
+        // Synchronize to make sure the matrix tiles are loaded
+        __syncthreads();
+
+        // Multiply the two matrices together
+        for (int i = 0; i < 16; ++i) {
+            sum += Asub[threadIdx.y][i] * Bsub[i][threadIdx.x];
+        }
+
+        // Synchronize to make sure all the partial results have been computed
+        __syncthreads();
+    }
+
+    // Write the result to global memory
+    C[row * width + col] = sum;
+}
+```
+
+# 矩阵乘法
 
 ```cpp
 // 矩阵乘法
@@ -284,7 +387,6 @@ vector<vector<int>> matrixMultiply(const vector<vector<int>>& A, const vector<ve
 
     return C;
 }
-
 ```
 
 ```cpp
@@ -316,8 +418,9 @@ vector<vector<int>> matrixMultiplyBlocked(const vector<vector<int>>& A, const ve
 
 ```
 
-```cpp
+# 反转链表
 
+```cpp
 ListNode* reverseList(ListNode* head) {
     ListNode* prev = nullptr;
     ListNode* curr = head;
@@ -329,65 +432,70 @@ ListNode* reverseList(ListNode* head) {
     }
     return prev;
 }
-
 ```
+
+# 快速排序
 
 
 ```cpp
-void quickSort(vector<int>& nums, int left, int right) {
-    if (left >= right) return;
-    
-    int pivot = partition(nums, left, right);
-    quickSort(nums, left, pivot - 1);
-    quickSort(nums, pivot + 1, right);
+int partition(int* a,int low,int high){
+	int pivot = a[low];
+	while(low < high){
+		while(low<high && a[high] >= pivot) --high;
+		a[low] = a[high];
+		while(low<high && a[low] <= pivot) ++low;
+		a[high] = a[low];
+	}
+	a[low] = pivot;
+	return low;
 }
 
-int partition(vector<int>& nums, int left, int right) {
-    int pivot = nums[right];
-    int i = left;
-    for (int j = left; j < right; j++) {
-        if (nums[j] < pivot) {
-            swap(nums[i], nums[j]);
-            i++;
-        }
-    }
-    swap(nums[i], nums[right]);
-    return i;
-}
+void qsort(int* a, int low, int high){
+	if(low < high){
+		int pivot = partition(a,low,high);
+		qsort(a,low,pivot-1);
+		qsort(a,pivot+1,high);
+	}
+} 
+
 
 ```
+
+# 归并排序
 
 ```cpp
-void merge(vector<int>& nums, int left, int mid, int right) {
-    vector<int> temp(right - left + 1);
-    int i = left, j = mid + 1, k = 0;
-    while (i <= mid && j <= right) {
-        if (nums[i] <= nums[j]) {
-            temp[k++] = nums[i++];
-        } else {
-            temp[k++] = nums[j++];
-        }
-    }
-    while (i <= mid) {
-        temp[k++] = nums[i++];
-    }
-    while (j <= right) {
-        temp[k++] = nums[j++];
-    }
-    for (int i = left; i <= right; i++) {
-        nums[i] = temp[i - left];
-    }
+const int N = 100010;
+int a[N];
+int *b = (int *)malloc(sizeof(int)*N);
+
+void merge(int *a,int low,int mid,int high){
+	int i,j,k;
+	for(k=low;k<=high;k++){
+		b[k] = a[k];
+	}
+	for(i=low,k=i,j=mid+1;i<=mid&&j<=high;k++){
+		if(b[i] <= b[j]){
+			a[k] = b[i++];
+		} 
+		else{
+			a[k] = b[j++];
+		}
+	}
+	while(i<=mid) a[k++] = b[i++];
+	while(j<=high) a[k++] = b[j++];	
 }
 
-void mergeSort(vector<int>& nums, int left, int right) {
-    if (left >= right) return;
-    int mid = left + (right - left) / 2;
-    mergeSort(nums, left, mid);
-    mergeSort(nums, mid + 1, right);
-    merge(nums, left, mid, right);
-}
-
+void mergesort(int *a,int low,int high){
+	if(low < high){
+		int mid = (low+high)/2;
+		mergesort(a,low,mid);
+		mergesort(a,mid+1,high);
+		merge(a,low,mid,high);
+	}
+} 
 ```
+
+# 树
 
 
 ```cpp
@@ -407,6 +515,108 @@ void preorderTraversal(TreeNode* root) {
     preorderTraversal(root->right);
 }
 ```
+
+# 链表
+
+```c++
+typedef struct Node{
+	int data;
+	Node *next;
+}node;
+
+node* create(int data){
+	node *n = (node *)malloc(sizeof(node));
+	n->data = data;
+	n->next = NULL;
+	return n;
+}
+
+void print(node *head){
+	node* p;
+	p = head;
+	while(p->next != NULL){
+		cout << p->next->data << " ";
+		p = p->next;
+	}
+	cout << endl;
+}
+
+// 反转
+void reverse(node *head){
+	node *p;
+	p = head->next;
+	head->next = NULL;
+	while(p != NULL){
+		node *t = p->next;
+		p->next = head->next;
+		head->next = p;
+		p = t;
+	}
+}
+
+// 快慢指针
+void change(node *head){
+	node *q, *p;
+	// 1. 快慢指針 來确定中间位置
+	q = head;
+	p = head;
+	while(q->next != NULL){
+		p = p->next;
+		q = q->next;
+		if(q->next != NULL) q = q->next;
+	} 
+	// 2. 反转链表
+	// 头插法 头就是 p
+	reverse(p);
+	// 3. 按题目要求进行插入
+	node *f = head->next;
+	node *r = p->next;
+	p->next = NULL;
+    
+	while(r!=NULL){
+		node* t2 = r->next;
+		r->next = f->next;
+		f->next = r;
+		f = r->next; 
+		r = t2;
+	} 
+}
+```
+
+# 二叉树的中序遍历
+
+```c++
+typedef struct Node{
+	char data;
+	struct Node *left, *right;
+}node;
+
+void visit(node *t){
+	cout << t->data << " ";
+}
+
+void bianli(node *t,int h){
+	if(t != NULL){
+	// 根 和 叶子 
+		if(h > 0 && t->left!=NULL && t->right!=NULL) cout << "(";
+		bianli(t->left,h+1);
+		visit(t);
+		bianli(t->right,h+1);
+		if(h > 0 && t->left!=NULL && t->right!=NULL) cout << ")";
+	}	
+}
+
+node* create(char data){
+	node* s;
+	s = (node *)malloc(sizeof(node));
+	s->data = data;
+	s->right = NULL;
+	s->left = NULL;
+	return s;
+}
+```
+
+# STL
 
 
 ```cpp
@@ -481,5 +691,232 @@ int main() {
 
 ```
 
+# vector
 
+```c++
+// 初始化一个有 5 个元素的 vector, 每个元素初始化为 0
+std::vector<int> v2(5, 0);
+
+// 从数组初始化 vector
+int arr[] = {1, 2, 3, 4, 5};
+std::vector<int> v3(arr, arr + sizeof(arr)/sizeof(int));
+
+// 使用 initializer_list 初始化 vector
+std::vector<int> v4 = {1, 2, 3, 4, 5};
+
+std::vector<int> v;
+v.push_back(1);  // 在末尾添加元素 1
+v.emplace_back(2);  // 在末尾添加元素 2
+v.insert(v.begin() + 1, 3);  // 在第二个位置插入元素 3
+v.erase(v.begin() + 2);  // 删除第三个元素
+v.clear();  // 清空 vector
+
+std::vector<int> v = {1, 2, 3, 4, 5};
+int first = v[0];  // 访问第一个元素
+int last = v.back();  // 访问最后一个元素
+for (int i = 0; i < v.size(); i++) {
+    std::cout << v[i] << " ";
+}
+for (int x : v) {
+    std::cout << x << " ";  // 使用范围 for 循环遍历
+}
+
+std::vector<int> v1 = {1, 2, 3};
+std::vector<int> v2 = {4, 5, 6};
+v1.swap(v2);  // 交换 v1 和 v2 的内容
+```
+
+``` c++
+std::vector<std::vector<int>> grid(m, std::vector<int>(n));
+```
+
+# 生产者和消费者
+
+```c++
+std::mutex mtx;
+std::condition_variable cv;
+std::queue<int> q;
+
+void producer() {
+    mtx.lock();
+    q.push(item);
+    cv.notify_one(); // notify_one() 向一个条件变量发送通知,以唤醒正在等待这个条件变量的一个线程
+    mtx.unlock();
+}
+
+void consumer() {
+    mtx.lock();
+    while (q.empty()) {
+        cv.wait(mtx);
+    }
+    int item = q.front();
+    q.pop();
+    mtx.unlock();
+}
+```
+
+`cv.notify_all();`，它会唤醒所有正在等待该条件变量的线程。
+
+# map
+
+```c++
+// 创建一个空的 map
+std::map<std::string, int> myMap;
+
+// 使用初始化列表创建并初始化 map
+std::map<std::string, int> capitals = {
+    {"USA", Washington},
+    {"France", Paris},
+    {"Japan", Tokyo}
+};
+
+// 插入新元素
+myMap["London"] = 8942;
+myMap.insert(std::make_pair("Berlin", 3670));
+
+// 访问元素
+int usaCapital = myMap["USA"];  // 获取值
+auto it = myMap.find("France"); // 查找元素
+if (it != myMap.end()) {
+    std::cout << it->second; // 访问值
+}
+
+// 删除指定键的元素
+myMap.erase("Japan");
+
+// 删除迭代器指向的元素
+auto it = myMap.find("France");
+if (it != myMap.end()) {
+    myMap.erase(it);
+}
+
+// 清空整个 map
+myMap.clear();
+
+// 查找元素是否存在
+bool found = (myMap.find("USA") != myMap.end());
+
+// 自定义比较函数
+struct CustomComparator {
+    bool operator()(const std::string& a, const std::string& b) {
+        return a.length() < b.length();
+    }
+};
+
+std::map<std::string, int, CustomComparator> myMap;
+```
+
+# 模板
+
+```C++
+template <typename T>
+T max(T a, T b) {
+    return (a > b) ? a : b;
+}
+
+int result = max(5, 10); // 调用 max<int>(5, 10)
+```
+
+# 匿名函数
+
+```c++
+   // 使用匿名函数作为比较器
+    std::sort(numbers.begin(), numbers.end(), [](int a, int b) {
+        return a > b; // 按照降序排序
+    });
+
+   // 使用 Lambda 函数查找最大值
+    auto max_element = *std::max_element(numbers.begin(), numbers.end(), 
+        [](int a, int b) -> bool {
+            return a < b;
+        });
+
+	// 使用 Lambda 函数计算平方和
+    int square_sum = std::accumulate(numbers.begin(), numbers.end(), 0, 
+        [](int acc, int x) -> int {
+            return acc + x * x;
+        });
+```
+
+lambda 表达式的语法如下:
+
+```
+[capture clause](parameters) -> return_type { body }
+```
+
+- `capture clause`: 指定 lambda 函数可以访问的外部变量。可以为空。
+- `parameters`: 函数参数列表。可以为空。
+- `return_type`: 函数返回类型。可以省略,由编译器自动推断。
+- `body`: 函数体。
+
+Lambda 函数的 `capture clause` 用于指定 Lambda 函数可以访问的外部变量。可以使用以下几种方式:
+
+1. **值捕获**:
+   - 使用 `[x, y]` 捕获变量 `x` 和 `y` 的值。这会创建一个新的副本,在 Lambda 函数内部对这些副本进行操作,不会影响原始变量。
+   - 使用 `[&x, &y]` 捕获变量 `x` 和 `y` 的引用。这样可以在 Lambda 函数内部直接操作原始变量。
+2. **按值捕获全部**:
+   - 使用 `[=]` 捕获所有外部变量的值。
+   - 使用 `[&]` 捕获所有外部变量的引用。
+3. **按引用捕获全部**:
+   - 使用 `[=, &z]` 捕获所有外部变量的值,但变量 `z` 的引用。
+   - 使用 `[&, x]` 捕获所有外部变量的引用,但变量 `x` 的值。
+4. **隐式捕获**:
+   - 使用 `[this]` 捕获当前类的 `this` 指针。这在成员函数中很常见。
+
+```c++
+int x = 10, y = 20;
+
+// 值捕获 x 和 y
+auto f1 = [x, y]() {
+    std::cout << "x = " << x << ", y = " << y << std::endl;
+    // 这里的 x 和 y 是副本,不会影响原始变量
+};
+
+// 引用捕获 x 和 y
+auto f2 = [&x, &y]() {
+    x = 30;
+    y = 40;
+    std::cout << "x = " << x << ", y = " << y << std::endl;
+    // 这里直接修改了原始变量
+};
+
+// 按值捕获全部
+auto f3 = [=]() {
+    std::cout << "x = " << x << ", y = " << y << std::endl;
+};
+
+// 按引用捕获全部,但 x 按值捕获
+auto f4 = [&, x]() {
+    x = 50; // 这里修改的是按值捕获的 x 副本
+    std::cout << "x = " << x << ", y = " << y << std::endl;
+};
+```
+
+# 智能指针
+
+```c++
+#include <iostream>
+#include <memory>
+
+class MyClass {
+public:
+    MyClass() { std::cout << "MyClass constructor called." << std::endl; }
+    ~MyClass() { std::cout << "MyClass destructor called." << std::endl; }
+};
+
+int main() {
+    // 创建一个 unique_ptr
+    std::unique_ptr<MyClass> ptr1(new MyClass());
+
+    // 不允许拷贝 unique_ptr,但可以移动
+    std::unique_ptr<MyClass> ptr2 = std::move(ptr1);
+
+    // 输出 ptr1 和 ptr2 的状态
+    std::cout << "ptr1 is " << (ptr1 ? "not null" : "null") << std::endl; // 输出: ptr1 is null
+    std::cout << "ptr2 is " << (ptr2 ? "not null" : "null") << std::endl; // 输出: ptr2 is not null
+
+    // 当 ptr2 离开作用域时,对象将被自动释放
+    return 0;
+}
+```
 
