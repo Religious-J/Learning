@@ -1,0 +1,92 @@
+#include <sdaa_perf.h>
+using namespace sdaa;
+
+#define THREADNUM 8
+#define N 10000
+#define NUM 10000
+#define SIZE (THREADNUM * NUM)
+#define NN 1250
+
+__device__ void dma_a(double *src, ThreadGroup &tg){
+    
+    if(!thread_group_is_included(tg, threadIdx)){
+        return;
+    }
+
+    unsigned long loc = 0;
+
+    loc = threadIdx;
+
+    double *data = (double *)malloc(NUM*sizeof(double));
+
+    perf_start(PerfItemConfig(PERF_LATENCY));
+    for(int i=0; i<NN; i++){
+        memcpy_async(data, src + (loc * NN), NN * sizeof(double), MemcpyGlobalToSpm);
+        memcpy_wait();
+        // memcpy(data, src + (loc * NN), NN * sizeof(double));
+    }
+    perf_stop();
+
+    perf_start(PerfItemConfig(PERF_LATENCY));
+    for(int i=0;i<NN;i++){
+        memcpy_async(src+(loc*NN), data, NN*sizeof(double), MemcpySpmToGlobal);
+        memcpy_wait();
+    }
+    perf_stop();
+    
+    if(threadIdx == 0){
+        perf_print();
+    }
+    
+    free(data);
+}
+
+
+__global__ void test(double *src){
+    unsigned long thread_group[THREADNUM] = {0,1,2,3,4,5,6,7};
+    ThreadGroup tg(thread_group, THREADNUM);
+    dma_a(src, tg);
+}
+
+
+void call_kernel(double *src, double *out){
+    double *dev_a = NULL;
+    sdaaSetDevice(0);
+    sdaaMalloc((void **)(&dev_a), SIZE*sizeof(double));
+    sdaaMemcpy(dev_a, src, SIZE*sizeof(double), sdaaMemcpyHostToDevice);
+    
+    test<<<1>>>(dev_a);
+
+    sdaaDeviceSynchronize();
+    sdaaMemcpy(out, dev_a, SIZE*sizeof(double), sdaaMemcpyHostToDevice);
+    sdaaFree(dev_a);
+}
+
+int main(){
+    double data[SIZE];
+    double out[SIZE];
+
+    // init
+    for(int i=0; i<SIZE; i++){
+        data[i] = rand();
+    }
+
+    call_kernel(data, out);
+
+    int lop=0;
+    // check
+	for (int i = 0; i < SIZE; i++) {
+		if (fabs(out[i] - data[i]) > 1e-9) {
+            lop = 1;
+            break;
+		}
+	}
+	if(lop == 0){
+        printf("right!!!\n");
+    }
+    else{
+        printf("wrong!!!\n");
+    }
+
+    return 0;
+} 
